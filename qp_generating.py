@@ -2,325 +2,296 @@
 import streamlit as st
 import pandas as pd
 import io
-import re
 from PyPDF2 import PdfReader, PdfWriter
-from difflib import get_close_matches
 
-st.set_page_config(page_title="Seating Arrangement Generator", layout="wide")
-st.title("🎓 Seating Arrangement Generator")
+st.set_page_config(page_title="SeatMaster", layout="wide")
+st.title("🎓 SeatMaster – Seating Arrangement & QP Generator")
 
-# --- Upload Room Details ---
+# --- Upload Files ---
 room_file = st.file_uploader("Upload Room Details (Excel with Room, Start, End)", type=["xlsx", "csv"])
-
-# --- Upload Student List ---
 student_file = st.file_uploader("Upload Student List (Excel/CSV with Class No, Student Name, DAY1...)", type=["xlsx", "csv"])
+mapping_file = st.file_uploader("Upload QP Mapping (Excel/CSV with QP Code and Subject Name)", type=["xlsx", "csv"])
+qp_files = st.file_uploader("Upload QP PDFs (filename = QP Code)", type=["pdf"], accept_multiple_files=True)
 
-# --- Upload Question Papers ---
-qp_files = st.file_uploader("Upload QP PDFs", type=["pdf"], accept_multiple_files=True)
-
-# --- Initialize session state for persistence across reruns ---
-if "generated" not in st.session_state:
-    st.session_state["generated"] = False
-if "final_df_bytes" not in st.session_state:
-    st.session_state["final_df_bytes"] = None
-if "detailed_seating_bytes" not in st.session_state:
-    st.session_state["detailed_seating_bytes"] = None
-if "room_summary_bytes" not in st.session_state:
-    st.session_state["room_summary_bytes"] = None
-if "qp_detailed_bytes" not in st.session_state:
-    st.session_state["qp_detailed_bytes"] = None
-if "qp_count_bytes" not in st.session_state:
-    st.session_state["qp_count_bytes"] = None
-if "room_pdfs" not in st.session_state:
-    st.session_state["room_pdfs"] = {}  # mapping room -> pdf bytes
-
-# --- Helper functions ---
-def clean_subject(subject):
-    """Fix single-letter splits (e.g., P ART -> PART)"""
-    subject = re.sub(r'\b([A-Z])\s+([A-Z]{2,})\b', r'\1\2', subject)
-    subject = re.sub(r'\s+', ' ', subject).strip()
-    return subject
-
-def normalize_subject(subject):
-    """Normalize for consistent matching"""
-    if pd.isna(subject):
-        return ""
-    subject = str(subject).upper()
-    subject = re.sub(r'\s+', ' ', subject).strip()
-    return subject
-
-def extract_subject_from_pdf(pdf_file):
-    """Extract subject from QP PDF"""
-    try:
-        reader = PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-        for line in text.splitlines():
-            if "AEC:" in line:
-                parts = line.split("-")
-                if len(parts) > 1:
-                    subj = parts[1].strip()
-                    return normalize_subject(clean_subject(subj))
-        return "UNKNOWN SUBJECT"
-    except Exception as e:
-        return f"ERROR: {e}"
-
+# --- Helpers ---
 def df_to_bytes(df):
-    """Convert DataFrame to excel bytes"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Sheet1")
     return output.getvalue()
 
-# --- Build subject -> PDF mapping (normalized keys) ---
-qp_mapping = {}
-if qp_files:
-    for qp in qp_files:
-        subject_name = extract_subject_from_pdf(qp)
-        subject_name = normalize_subject(subject_name)
-        qp_mapping[subject_name] = qp.getvalue()
+def normalize_subject(s):
+    """Return an uppercase, trimmed string for consistent matching."""
+    if pd.isna(s):
+        return ""
+    return str(s).strip().upper()
 
-# --- Main logic ---
-if room_file is not None and student_file is not None:
-    # Load rooms
-    if room_file.name.endswith(".csv"):
-        room_df = pd.read_csv(room_file)
-    else:
-        room_df = pd.read_excel(room_file)
+# --- Initialize session_state (persist outputs) ---
+if "generated" not in st.session_state:
+    st.session_state["generated"] = False
+for key in ["final_df_bytes","detailed_seating_bytes","room_summary_bytes",
+            "qp_summary_bytes","qp_count_bytes","hall_qp_summary_bytes","room_pdfs"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if "bytes" in key or key=="room_pdfs" else False
 
-    # Load students
-    if student_file.name.endswith(".csv"):
-        students = pd.read_csv(student_file)
-    else:
-        students = pd.read_excel(student_file)
+# --- Load files ---
+if room_file and student_file:
+    room_df = pd.read_csv(room_file) if room_file.name.endswith(".csv") else pd.read_excel(room_file)
+    students = pd.read_csv(student_file) if student_file.name.endswith(".csv") else pd.read_excel(student_file)
 
-    # Reset generated flag when inputs change (optional safety)
-    # If you want to force re-generate when inputs change: uncomment below
-    # st.session_state["generated"] = False
-    # st.session_state["room_pdfs"] = {}
+    st.subheader(f"📊 Total Students: {len(students)}")
 
-    total_students = len(students)
-    st.subheader(f"📊 Total Students: {total_students}")
-
-    st.subheader("🏫 Available Rooms")
     rooms = room_df["Room"].unique().tolist()
     selected_rooms = st.multiselect("Select Rooms (order is preserved)", rooms)
 
-    # --- Select Day for Subject ---
     subject_columns = [c for c in students.columns if c.upper().startswith("DAY")]
-    if subject_columns:
-        selected_day = st.selectbox("Select Day to Conduct Subjects", subject_columns)
-    else:
-        selected_day = None
+    selected_day = st.selectbox("Select Day to Conduct Subjects", subject_columns) if subject_columns else None
 
     if selected_rooms:
-        total_capacity = 0
-        for room in selected_rooms:
-            room_info = room_df[room_df["Room"] == room].iloc[0]
-            start, end = int(room_info["Start"]), int(room_info["End"])
-            benches = end - start + 1
-            total_capacity += benches * 3  # 3 seats per bench
+        total_capacity = sum(
+            (int(room_df[room_df["Room"] == room].iloc[0]["End"]) -
+             int(room_df[room_df["Room"] == room].iloc[0]["Start"]) + 1) * 3
+            for room in selected_rooms
+        )
         st.info(f"🪑 Total Capacity of Selected Rooms: {total_capacity} seats")
 
+    # Prepare normalized mapping if provided (normalize Subject Name)
+    mapping_df = None
+    if mapping_file:
+        mapping_df = pd.read_csv(mapping_file) if mapping_file.name.endswith(".csv") else pd.read_excel(mapping_file)
+        # Normalize both columns for robust matching
+        if "QP Code" in mapping_df.columns:
+            mapping_df['QP Code'] = mapping_df['QP Code'].astype(str).str.upper().str.strip()
+        if "Subject Name" in mapping_df.columns:
+            mapping_df['Subject Name'] = mapping_df['Subject Name'].apply(normalize_subject)
+
+    # Build uploaded_qps dict keyed by QP code (upper, no extension)
+    uploaded_qps = {}
+    if qp_files:
+        uploaded_qps = {qp.name.rsplit(".pdf",1)[0].upper().strip(): qp.getvalue() for qp in qp_files}
+
     if st.button("Generate Seating Plan"):
+        # validation
         if not selected_rooms:
             st.error("Please select at least one room.")
         elif "Class No" not in students.columns or "Student Name" not in students.columns:
-            st.error("Student list must contain 'Class No' and 'Student Name' columns.")
+            st.error("Student list must contain 'Class No' and 'Student Name'.")
         else:
             ordered_rooms = selected_rooms
-            seating_data = []
             seats = ["Left", "Right", "Center"]
+            seating_data = []
 
-            # Prepare benches
+            # Prepare benches per room
             room_benches = {}
             for room in ordered_rooms:
-                room_info = room_df[room_df["Room"] == room].iloc[0]
-                start, end = int(room_info["Start"]), int(room_info["End"])
+                row = room_df[room_df["Room"] == room].iloc[0]
+                start, end = int(row["Start"]), int(row["End"])
                 room_benches[room] = list(range(start, end + 1))
 
-            # Interleaved seat allocation
+            # Interleaved seating assignment: Left,Right,Center across rooms and benches
             for seat in seats:
                 for room in ordered_rooms:
                     for bench in room_benches[room]:
                         seating_data.append({"Room": room, "Bench": bench, "Seat": seat})
 
-            # --- Assign students ---
+            # Assign students into seating slots
             student_list = students.values.tolist()
             student_columns = students.columns.tolist()
-            for i, seat in enumerate(seating_data):
+            for i, slot in enumerate(seating_data):
                 if i < len(student_list):
                     row = student_list[i]
-                    student_info = dict(zip(student_columns, row))
-                    seat["Class No"] = student_info["Class No"]
-                    seat["Student Name"] = student_info["Student Name"]
-                    if selected_day:
-                        subjects = str(student_info[selected_day]) if pd.notna(student_info[selected_day]) else "-"
-                        seat["Subjects"] = ", ".join([normalize_subject(s) for s in subjects.split(",") if s.strip()]) if subjects != "-" else "-"
+                    info = dict(zip(student_columns, row))
+                    slot["Class No"] = info["Class No"]
+                    slot["Student Name"] = info["Student Name"]
+                    if selected_day and pd.notna(info[selected_day]):
+                        # Normalize each subject in the comma-separated list
+                        raw = str(info[selected_day])
+                        subjects = [normalize_subject(s) for s in raw.split(",") if str(s).strip() != ""]
+                        slot["Subjects"] = ", ".join(subjects) if subjects else "-"
                     else:
-                        seat["Subjects"] = "-"
+                        slot["Subjects"] = "-"
                 else:
-                    seat["Class No"] = "-"
-                    seat["Student Name"] = "-"
-                    seat["Subjects"] = "-"
+                    slot["Class No"] = "-"
+                    slot["Student Name"] = "-"
+                    slot["Subjects"] = "-"
 
             seating_df = pd.DataFrame(seating_data)
 
-            # --- Pivot for display ---
-            final_df = seating_df.pivot_table(
-                index=["Room", "Bench"], 
-                columns="Seat", values="Class No", 
-                aggfunc="first"
-            ).reset_index()
-            seat_order = ["Left", "Center", "Right"]
-            final_df = final_df[["Room", "Bench"] + seat_order]
+            # Pivot view for display
+            final_df = seating_df.pivot_table(index=["Room","Bench"], columns="Seat", values="Class No", aggfunc="first").reset_index()
+            # Ensure columns order Left, Center, Right if present
+            display_cols = ["Room","Bench"]
+            for c in ["Left","Center","Right"]:
+                if c in final_df.columns:
+                    display_cols.append(c)
+            final_df = final_df[display_cols]
             final_df["Room"] = pd.Categorical(final_df["Room"], categories=ordered_rooms, ordered=True)
-            final_df = final_df.sort_values(["Room", "Bench"]).reset_index(drop=True)
-            st.subheader("🪑 Seating Arrangement")
-            st.dataframe(final_df)
+            final_df = final_df.sort_values(["Room","Bench"]).reset_index(drop=True)
 
-            # --- Room-wise summary ---
+            # Room summary & building qp_summary (normalized subjects)
             summary_records = []
+            qp_summary_records = []
             all_subjects = []
             for room in ordered_rooms:
-                room_students = seating_df[seating_df["Room"] == room]
-                valid_subjects = room_students[room_students["Subjects"] != "-"]["Subjects"]
-                room_subjects = [normalize_subject(s) for subj in valid_subjects for s in subj.split(",") if s.strip()]
+                rs = seating_df[seating_df["Room"] == room]
+                valid_subs = rs[rs["Subjects"] != "-"]["Subjects"]
+                room_subjects = []
+                for subj_list in valid_subs:
+                    for s in str(subj_list).split(","):
+                        s_norm = normalize_subject(s)
+                        if s_norm:
+                            room_subjects.append(s_norm)
+                            qp_summary_records.append({"Room": room, "Bench": rs.loc[valid_subs.index[valid_subs==subj_list][0],"Bench"] if False else None, "Seat": None, "Subject": s_norm})
+                            # we don't need Bench/Seat mapping inside this loop for counts; bench/seat locations handled separately below
+                            # (we will build bench-seat locations when creating qp_count_df)
                 all_subjects.extend(room_subjects)
                 summary_records.append({
                     "Room": room,
-                    "Total Students": len(room_students[room_students["Class No"] != "-"]),
+                    "Total Students": len(rs[rs["Class No"] != "-"]),
                     "Subjects in Room": ", ".join(sorted(set(room_subjects)))
                 })
-            summary_df = pd.DataFrame(summary_records)
-            st.subheader("📋 Room Summary (Subjects)")
-            st.dataframe(summary_df)
 
-            # --- QP Totals across all rooms ---
-            qp_counts = pd.Series(all_subjects).value_counts().reset_index()
-            qp_counts.columns = ["Subject", "Total QPs Needed"]
-            st.subheader("📑 Total QPs Needed (All Rooms)")
-            st.dataframe(qp_counts)
-
-            # --- Room-wise QP Summary with Bench/Seat ---
+            # Instead of the above hacky qp_summary_records (we need bench/seat), rebuild properly:
             qp_summary_records = []
             for _, row in seating_df[seating_df["Subjects"] != "-"].iterrows():
-                subjects = [normalize_subject(s) for s in row["Subjects"].split(",") if s.strip()]
-                for subj in subjects:
-                    qp_summary_records.append({
-                        "Room": row["Room"],
-                        "Bench": row["Bench"],
-                        "Seat": row["Seat"],
-                        "Subject": subj
-                    })
+                bench = row["Bench"]
+                seat = row["Seat"]
+                room = row["Room"]
+                for s in str(row["Subjects"]).split(","):
+                    s_norm = normalize_subject(s)
+                    if s_norm:
+                        qp_summary_records.append({"Room": room, "Bench": bench, "Seat": seat, "Subject": s_norm})
+                        all_subjects.append(s_norm)
+
+            summary_df = pd.DataFrame(summary_records)
+
+            # QP detailed & counts
             qp_summary_df = pd.DataFrame(qp_summary_records)
-            qp_count_df = (
-                qp_summary_df.groupby(["Room", "Subject"])
-                .agg(
-                    QP_Needed=("Subject", "count"),
-                    Bench_Seat_Locations=("Bench", lambda x: ", ".join([f"{b}-{s}" for b, s in zip(x, qp_summary_df.loc[x.index, "Seat"])]))
+            if not qp_summary_df.empty:
+                qp_count_df = (
+                    qp_summary_df.groupby(["Room","Subject"])
+                    .agg(
+                        QP_Needed=("Subject","count"),
+                        Bench_Seat_Locations=("Bench", lambda x: ", ".join([f"{b}-{s}" for b,s in zip(x, qp_summary_df.loc[x.index,"Seat"])]))
+                    )
+                    .reset_index()
+                    .sort_values(["Room","Subject"])
                 )
-                .reset_index()
-                .sort_values(["Room", "Subject"])
-            )
-            st.subheader("📑 QP Requirement per Room (with Bench/Seat)")
-            st.dataframe(qp_count_df)
+            else:
+                qp_count_df = pd.DataFrame(columns=["Room","Subject","QP_Needed","Bench_Seat_Locations"])
 
-            # --- Generate Room-wise QP PDFs and persist all downloads in session_state ---
-            room_pdfs_local = {}  # temporary container
-            if qp_files:
+            # Hall-wise QP summary (simple room-subject-count)
+            if not qp_summary_df.empty:
+                hall_qp_summary_df = qp_summary_df.groupby(["Room","Subject"]).size().reset_index(name="Total QPs Needed").sort_values(["Room","Subject"])
+            else:
+                hall_qp_summary_df = pd.DataFrame(columns=["Room","Subject","Total QPs Needed"])
+
+            # --- QP PDF generation: generate per (room,subject) using exact counts ---
+            room_pdfs = {}
+            if mapping_df is not None and qp_files:
+                # Ensure mapping_df normalized 'Subject Name' (done earlier)
                 for room in ordered_rooms:
-                    room_students = seating_df[seating_df["Room"] == room]
-                    valid_students = room_students[room_students["Subjects"] != "-"]
-                    writer = PdfWriter()
-                    for _, r in valid_students.iterrows():
-                        subjects = [s.strip() for s in r["Subjects"].split(",") if s.strip()]
-                        for subj in subjects:
-                            # normalized subj
-                            subj_norm = normalize_subject(subj)
-                            if subj_norm in qp_mapping:
-                                pdf_bytes = qp_mapping[subj_norm]
-                            else:
-                                match = get_close_matches(subj_norm, qp_mapping.keys(), n=1, cutoff=0.7)
-                                pdf_bytes = qp_mapping[match[0]] if match else None
-                            if pdf_bytes:
-                                reader = PdfReader(io.BytesIO(pdf_bytes))
-                                for page in reader.pages:
-                                    writer.add_page(page)
-                    if len(writer.pages) > 0:
-                        output_bytes = io.BytesIO()
-                        writer.write(output_bytes)
-                        room_pdfs_local[room] = output_bytes.getvalue()
-                    # if no pages, skip storing
+                    room_rows = qp_summary_df[qp_summary_df["Room"] == room]
+                    if room_rows.empty:
+                        continue
 
-            # --- Persist generated files (excel bytes + room pdfs) in session_state ---
+                    # Count how many students in this room need each subject
+                    subject_counts = room_rows["Subject"].value_counts().to_dict()
+
+                    writer = PdfWriter()
+                    for subj, count in subject_counts.items():
+                        # lookup QP code in mapping (mapping_df 'Subject Name' is normalized)
+                        if mapping_df is None or "Subject Name" not in mapping_df.columns:
+                            continue
+                        matched = mapping_df[mapping_df["Subject Name"] == subj]["QP Code"].values
+                        if matched.size == 0:
+                            # No mapping found -> skip (you can also log warn)
+                            st.warning(f"No QP code found for subject '{subj}' (room {room})")
+                            continue
+                        qp_code = matched[0]
+                        if qp_code not in uploaded_qps:
+                            st.warning(f"No uploaded PDF found for QP code '{qp_code}' (subject {subj}, room {room})")
+                            continue
+                        # append the PDF 'count' times (one copy per student)
+                        reader = PdfReader(io.BytesIO(uploaded_qps[qp_code]))
+                        for _ in range(int(count)):
+                            for p in reader.pages:
+                                writer.add_page(p)
+                    # if any pages were added, write to bytes
+                    if len(writer.pages) > 0:
+                        out = io.BytesIO()
+                        writer.write(out)
+                        out.seek(0)
+                        room_pdfs[room] = out.getvalue()
+
+            # Persist outputs in session_state (bytes)
             st.session_state["final_df_bytes"] = df_to_bytes(final_df)
             st.session_state["detailed_seating_bytes"] = df_to_bytes(seating_df)
             st.session_state["room_summary_bytes"] = df_to_bytes(summary_df)
-            st.session_state["qp_detailed_bytes"] = df_to_bytes(qp_summary_df if not qp_summary_df.empty else pd.DataFrame())
-            st.session_state["qp_count_bytes"] = df_to_bytes(qp_count_df if not qp_count_df.empty else pd.DataFrame())
-            st.session_state["room_pdfs"] = room_pdfs_local
+            st.session_state["qp_summary_bytes"] = df_to_bytes(qp_summary_df)
+            st.session_state["qp_count_bytes"] = df_to_bytes(qp_count_df)
+            st.session_state["hall_qp_summary_bytes"] = df_to_bytes(hall_qp_summary_df)
+            st.session_state["room_pdfs"] = room_pdfs
             st.session_state["generated"] = True
 
-    # --- Show download buttons (read from session_state so they persist across reruns) ---
-    if st.session_state.get("generated"):
-        st.markdown("---")
-        st.subheader("📥 Downloads")
+# --- Display stored tables (persisted) ---
+if st.session_state.get("generated"):
+    st.subheader("🪑 Seating Arrangement")
+    try:
+        st.dataframe(pd.read_excel(io.BytesIO(st.session_state["final_df_bytes"])))
+    except Exception:
+        st.write("Seating plan not available.")
 
-        if st.session_state["final_df_bytes"]:
-            st.download_button(
-                label="📥 Download Seating Plan",
-                data=st.session_state["final_df_bytes"],
-                file_name="SeatingPlan.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_seatingplan"
-            )
-        if st.session_state["detailed_seating_bytes"]:
-            st.download_button(
-                label="📥 Download Detailed Seating",
-                data=st.session_state["detailed_seating_bytes"],
-                file_name="DetailedSeating.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_detailed"
-            )
-        if st.session_state["room_summary_bytes"]:
-            st.download_button(
-                label="📥 Download Room Summary",
-                data=st.session_state["room_summary_bytes"],
-                file_name="RoomSummary.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_room_summary"
-            )
-        if st.session_state["qp_detailed_bytes"]:
-            st.download_button(
-                label="📥 Download QP Summary (Detailed)",
-                data=st.session_state["qp_detailed_bytes"],
-                file_name="QP_Detailed.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_qp_detailed"
-            )
-        if st.session_state["qp_count_bytes"]:
-            st.download_button(
-                label="📥 Download QP Counts per Room",
-                data=st.session_state["qp_count_bytes"],
-                file_name="QP_Count.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_qp_counts"
-            )
+    st.subheader("📋 Room Summary (Subjects)")
+    try:
+        st.dataframe(pd.read_excel(io.BytesIO(st.session_state["room_summary_bytes"])))
+    except Exception:
+        st.write("Room summary not available.")
 
-        # Room-wise PDF downloads
-        if st.session_state["room_pdfs"]:
-            st.subheader("📄 Room-wise QP PDFs")
-            for room, pdf_bytes in st.session_state["room_pdfs"].items():
-                st.download_button(
-                    label=f"📥 Download {room} QPs",
-                    data=pdf_bytes,
-                    file_name=f"{room}_QPs.pdf",
-                    mime="application/pdf",
-                    key=f"dl_room_pdf_{room}"
-                )
-        else:
-            st.info("No room PDFs were generated (no matching QPs uploaded).")
+    st.subheader("📊 Hall-wise QP Summary")
+    try:
+        st.dataframe(pd.read_excel(io.BytesIO(st.session_state["hall_qp_summary_bytes"])))
+    except Exception:
+        st.write("Hall-wise QP summary not available.")
+
+# --- Download buttons (unique keys) ---
+if st.session_state.get("generated"):
+    st.markdown("---")
+    st.subheader("📥 Downloads")
+
+    if st.session_state["final_df_bytes"]:
+        st.download_button("📥 Download Seating Plan", st.session_state["final_df_bytes"],
+                           "SeatingPlan.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_seating_plan")
+
+    if st.session_state["detailed_seating_bytes"]:
+        st.download_button("📥 Download Detailed Seating", st.session_state["detailed_seating_bytes"],
+                           "DetailedSeating.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_detailed_seating")
+
+    if st.session_state["room_summary_bytes"]:
+        st.download_button("📥 Download Room Summary", st.session_state["room_summary_bytes"],
+                           "RoomSummary.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_room_summary")
+
+    if st.session_state["qp_summary_bytes"]:
+        st.download_button("📥 Download QP Summary (Detailed)", st.session_state["qp_summary_bytes"],
+                           "QP_Detailed.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_qp_detailed")
+
+    if st.session_state["qp_count_bytes"]:
+        st.download_button("📥 Download QP Counts per Room", st.session_state["qp_count_bytes"],
+                           "QP_Count.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_qp_counts")
+
+    if st.session_state["hall_qp_summary_bytes"]:
+        st.download_button("📥 Download Hall-wise QP Summary", st.session_state["hall_qp_summary_bytes"],
+                           "Hall_QP_Summary.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="dl_hall_qp_summary")
+
+    # Room PDFs
+    if st.session_state["room_pdfs"]:
+        st.subheader("📄 Room-wise QP PDFs")
+        for i, (room, pdf_bytes) in enumerate(st.session_state["room_pdfs"].items()):
+            st.download_button(f"📥 Download {room} QPs", pdf_bytes, f"{room}_QPs.pdf", "application/pdf", key=f"dl_room_pdf_{i}")
+
