@@ -39,6 +39,6 @@
     ```
 
 ## Run The Application
-    streamlit run qp_generating.py
+    streamlit run app.py
 
 
