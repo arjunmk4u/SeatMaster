@@ -61,43 +61,92 @@ def build_uploaded_qps(qp_file_objs):
 # -------------------------
 # Tabs
 # -------------------------
-tabs = st.tabs(["Uploads", "Seating", "QP Arrangement", "Downloads"])
+tabs = st.tabs(["📁 File Uploads", "🪑 Seating Plan", "📄 QP Arrangement"])
 
 # -------------------------
 # Tab 1: Uploads
 # -------------------------
 with tabs[0]:
-    st.header("Upload files")
-    st.markdown("Upload the room details, student list, optional QP mapping, and QP PDFs.")
-    room_file = st.file_uploader("Upload Room Details (Excel with Room, Start, End)", type=["xlsx", "csv"], key="u_room")
-    student_file = st.file_uploader("Upload Student List (Excel/CSV with Class No, Student Name, DAY1...)", type=["xlsx", "csv"], key="u_students")
-    mapping_file = st.file_uploader("Upload QP Mapping (Excel/CSV with QP Code and Subject Name)", type=["xlsx", "csv"], key="u_mapping")
-    qp_files = st.file_uploader("Upload QP PDFs (filename = QP Code)", type=["pdf"], accept_multiple_files=True, key="u_qps")
+    st.header("📁 File Upload Manager")
+    st.markdown("Upload all required files for the seating arrangement and QP generation process.")
+    
+    # Create upload sections with better organization
+    with st.expander("📊 Core Data Files", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            room_file = st.file_uploader(
+                "🏛️ Room Details", 
+                type=["xlsx", "csv"], 
+                key="u_room",
+                help="Excel/CSV with columns: Room, Start, End"
+            )
+        with col2:
+            student_file = st.file_uploader(
+                "👨‍🎓 Student List", 
+                type=["xlsx", "csv"], 
+                key="u_students",
+                help="Excel/CSV with Class No, Student Name, DAY1, DAY2..."
+            )
+    
+    with st.expander("📄 QP Configuration Files", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            mapping_file = st.file_uploader(
+                "🔗 QP Mapping", 
+                type=["xlsx", "csv"], 
+                key="u_mapping",
+                help="Excel/CSV with QP Code and Subject Name columns"
+            )
+        with col2:
+            qp_files = st.file_uploader(
+                "📑 QP PDFs", 
+                type=["pdf"], 
+                accept_multiple_files=True, 
+                key="u_qps",
+                help="PDF files where filename matches QP Code"
+            )
 
-    if st.button("Save uploads to session", key="save_uploads"):
-        save_uploaded_files(room_file, student_file, mapping_file, qp_files)
-        # Build small preview / basic validation
-        st.success("Files saved in session. Parse in Seating / QP tabs when you generate.")
-        if qp_files:
-            st.info(f"{len(qp_files)} QP PDFs uploaded.")
+    # Centered save button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("💾 Save All Files to Session", key="save_uploads", type="primary", use_container_width=True):
+            save_uploaded_files(room_file, student_file, mapping_file, qp_files)
+            st.success("✅ Files saved successfully! Proceed to next tabs.")
+            if qp_files:
+                st.info(f"📑 {len(qp_files)} QP PDFs uploaded and ready.")
 
     st.markdown("---")
-    st.subheader("Current session uploads")
-    col1, col2 = st.columns(2)
+    st.subheader("📋 Upload Status")
+    
+    # Create status cards
+    col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
-        st.write("Room file:", getattr(st.session_state["room_file_obj"], "name", None))
-        st.write("Students file:", getattr(st.session_state["student_file_obj"], "name", None))
+        room_status = "✅" if st.session_state["room_file_obj"] else "❌"
+        room_name = getattr(st.session_state["room_file_obj"], "name", "Not uploaded")
+        st.metric("🏛️ Room Details", room_status, room_name)
+    
     with col2:
-        st.write("Mapping file:", getattr(st.session_state["mapping_file_obj"], "name", None))
-        qps_list = [f.name for f in st.session_state["qp_file_objs"]] if st.session_state["qp_file_objs"] else None
-        st.write("QP PDFs:", qps_list)
+        student_status = "✅" if st.session_state["student_file_obj"] else "❌"
+        student_name = getattr(st.session_state["student_file_obj"], "name", "Not uploaded")
+        st.metric("👨‍🎓 Student List", student_status, student_name)
+    
+    with col3:
+        mapping_status = "✅" if st.session_state["mapping_file_obj"] else "❌"
+        mapping_name = getattr(st.session_state["mapping_file_obj"], "name", "Not uploaded")
+        st.metric("🔗 QP Mapping", mapping_status, mapping_name)
+    
+    with col4:
+        qp_count = len(st.session_state["qp_file_objs"]) if st.session_state["qp_file_objs"] else 0
+        qp_status = "✅" if qp_count > 0 else "❌"
+        st.metric("📑 QP PDFs", qp_status, f"{qp_count} files")
 
 # -------------------------
 # Tab 2: Seating
 # -------------------------
 with tabs[1]:
-    st.header("Seating plan")
-    st.markdown("Select rooms and the DAY column to use for subjects, then Generate Seating Plan.")
+    st.header("🪑 Seating Plan Generator")
+    st.markdown("Configure room selection and exam day, then generate optimized seating arrangements.")
 
     # Load (parse) room and student files only when available in session
     room_df = None
@@ -166,21 +215,117 @@ with tabs[1]:
                 st.session_state["generated_seating"] = True
                 st.success("Seating plan generated and stored in session.")
 
-        # Display previews if available
+        # Display previews and downloads if available
         if st.session_state.get("generated_seating"):
-            st.subheader("🪑 Seating Arrangement (Preview)")
-            try:
-                st.dataframe(pd.read_excel(io.BytesIO(st.session_state["final_df_bytes"])))
-            except Exception:
-                st.write("Seating plan preview not available.")
+            st.markdown("---")
+            st.subheader("🪑 Seating Arrangement Results")
+            
+            # Create tabs for different views
+            result_tabs = st.tabs(["📊 Seating Plan", "📋 Room Summary", "📄 Detailed View", "📥 Downloads"])
+            
+            with result_tabs[0]:
+                st.markdown("**Main seating arrangement by room and bench:**")
+                try:
+                    st.dataframe(pd.read_excel(io.BytesIO(st.session_state["final_df_bytes"])), use_container_width=True, hide_index=True)
+                except Exception:
+                    st.warning("Seating plan preview not available.")
+            
+            with result_tabs[1]:
+                st.markdown("**Overview of subjects and students by room:**")
+                try:
+                    st.dataframe(pd.read_excel(io.BytesIO(st.session_state["room_summary_bytes"])), use_container_width=True, hide_index=True)
+                except Exception:
+                    st.warning("Room summary not available.")
+            
+            with result_tabs[2]:
+                st.markdown("**Complete detailed seating with all information:**")
+                try:
+                    st.dataframe(pd.read_excel(io.BytesIO(st.session_state["detailed_seating_bytes"])), use_container_width=True, hide_index=True)
+                except Exception:
+                    st.warning("Detailed seating not available.")
+            
+            with result_tabs[3]:
+                st.markdown("**Download seating-related files:**")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.session_state["final_df_bytes"]:
+                        st.download_button(
+                            "📊 Download Seating Plan", 
+                            st.session_state["final_df_bytes"],
+                            "SeatingPlan.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_seating_plan",
+                            use_container_width=True
+                        )
+                
+                with col2:
+                    if st.session_state["detailed_seating_bytes"]:
+                        st.download_button(
+                            "📋 Download Detailed Seating", 
+                            st.session_state["detailed_seating_bytes"],
+                            "DetailedSeating.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_detailed_seating",
+                            use_container_width=True
+                        )
+                
+                with col3:
+                    if st.session_state["room_summary_bytes"]:
+                        st.download_button(
+                            "🏛️ Download Room Summary", 
+                            st.session_state["room_summary_bytes"],
+                            "RoomSummary.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_room_summary",
+                            use_container_width=True
+                        )
+                
+                # QP-related downloads in a separate row
+                st.markdown("**QP Analysis Files:**")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.session_state["qp_summary_bytes"]:
+                        st.download_button(
+                            "📄 Download QP Summary", 
+                            st.session_state["qp_summary_bytes"],
+                            "QP_Summary.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_qp_summary",
+                            use_container_width=True
+                        )
+                
+                with col2:
+                    if st.session_state["qp_count_bytes"]:
+                        st.download_button(
+                            "🔢 Download QP Counts", 
+                            st.session_state["qp_count_bytes"],
+                            "QP_Counts.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_qp_counts",
+                            use_container_width=True
+                        )
+                
+                with col3:
+                    if st.session_state["hall_qp_summary_bytes"]:
+                        st.download_button(
+                            "🏛️ Download Hall QP Summary", 
+                            st.session_state["hall_qp_summary_bytes"],
+                            "Hall_QP_Summary.xlsx", 
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_hall_qp_summary",
+                            use_container_width=True
+                        )
             
 
 # -------------------------
 # Tab 3: QP Arrangement
 # -------------------------
 with tabs[2]:
-    st.header("QP Arrangement & PDF generation")
-    st.markdown("Provide mapping file (subject -> QP code) and QP PDFs, then generate room-wise QP PDFs.")
+    st.header("📄 QP Arrangement & PDF Generation")
+    st.markdown("Create room-specific question paper bundles using subject mappings and uploaded QP PDFs.")
 
     # Parse mapping if present in session
     mapping_df = None
@@ -205,98 +350,156 @@ with tabs[2]:
         st.info("Please generate seating in the Seating tab first.")
     else:
         
-        st.subheader("📋 Room Summary (Subjects)")
-        try:
-            st.dataframe(pd.read_excel(io.BytesIO(st.session_state["room_summary_bytes"])))
-        except Exception:
-            st.write("Room summary not available.")
-        # show QP summary preview (from seating)
-        st.subheader("QP Summary (detailed)")
-        if st.session_state.get("qp_summary_bytes"):
+        # Create tabs for better organization of data views
+        summary_tabs = st.tabs(["🏛️ Room Summary", "📄 QP Details"])
+        
+        with summary_tabs[0]:
+            st.markdown("**Overview of subjects by room:**")
             try:
-                st.dataframe(pd.read_excel(io.BytesIO(st.session_state["qp_summary_bytes"])))
+                room_summary_df = pd.read_excel(io.BytesIO(st.session_state["room_summary_bytes"]))
+                st.dataframe(room_summary_df, use_container_width=True, hide_index=True)
             except Exception:
-                st.write("QP summary preview not available.")
-        else:
-            st.write("No QP summary data present. Generate seating first.")
+                st.warning("Room summary not available.")
+        
+        with summary_tabs[1]:
+            st.markdown("**Detailed question paper requirements:**")
+            if st.session_state.get("qp_summary_bytes"):
+                try:
+                    qp_summary_df = pd.read_excel(io.BytesIO(st.session_state["qp_summary_bytes"]))
+                    st.dataframe(qp_summary_df, use_container_width=True, hide_index=True)
+                except Exception:
+                    st.warning("QP summary preview not available.")
+            else:
+                st.info("No QP summary data present. Generate seating first.")
 
-        if st.button("Generate Room-wise QP PDFs", key="gen_qp_pdfs"):
-            # validations
-            if st.session_state["mapping_df"] is None:
-                st.warning("No mapping file found in session; QP codes cannot be resolved.")
-            if not st.session_state["uploaded_qps"]:
-                st.warning("No QP PDFs uploaded; cannot build room PDFs.")
+        # Style the generate button
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🚀 Generate Room-wise QP PDFs", key="gen_qp_pdfs", type="primary", use_container_width=True):
+                # validations
+                if st.session_state["mapping_df"] is None:
+                    st.warning("No mapping file found in session; QP codes cannot be resolved.")
+                if not st.session_state["uploaded_qps"]:
+                    st.warning("No QP PDFs uploaded; cannot build room PDFs.")
 
-            # call generator and get room-wise summary
-            ordered_rooms = st.session_state.get("selected_rooms") or []
-            qp_summary_df = st.session_state.get("qp_summary_raw", pd.DataFrame())
-            room_pdfs, room_qp_summary_df = generate_room_pdfs(
-                st.session_state.get("mapping_df"),
-                qp_summary_df,
-                st.session_state.get("uploaded_qps", {}),
-                ordered_rooms
-            )
+                # call generator and get room-wise summary
+                ordered_rooms = st.session_state.get("selected_rooms") or []
+                qp_summary_df = st.session_state.get("qp_summary_raw", pd.DataFrame())
+                room_pdfs, room_qp_summary_df = generate_room_pdfs(
+                    st.session_state.get("mapping_df"),
+                    qp_summary_df,
+                    st.session_state.get("uploaded_qps", {}),
+                    ordered_rooms
+                )
 
-            st.session_state["room_pdfs"] = room_pdfs
-            st.session_state["room_qp_summary_df"] = room_qp_summary_df  # store for display & download
-            st.session_state["generated_qp"] = True
-            st.success("Room-wise QP PDFs generated (where mappings + uploads matched).")
+                st.session_state["room_pdfs"] = room_pdfs
+                st.session_state["room_qp_summary_df"] = room_qp_summary_df  # store for display & download
+                st.session_state["generated_qp"] = True
+                st.success("Room-wise QP PDFs generated (where mappings + uploads matched).")
 
-        # show room-wise QP summary table
+        # show room-wise QP summary table with better styling
+        st.markdown("---")
         if st.session_state.get("room_qp_summary_df") is not None:
             st.subheader("📋 Room-wise QP Summary")
-            st.dataframe(st.session_state["room_qp_summary_df"])
+            st.markdown("**Detailed breakdown of question papers by room:**")
+            
+            # Style the dataframe
+            st.dataframe(
+                st.session_state["room_qp_summary_df"],
+                use_container_width=True,
+                hide_index=True
+            )
         else:
-            st.info("Room-wise QP summary will appear here after generation.")
+            st.info("🔄 Room-wise QP summary will appear here after generation.")
 
-        # show room PDFs present
+        # show room PDFs present with download buttons
         if st.session_state.get("room_pdfs"):
-            st.subheader("Generated Room PDFs (preview list)")
-            st.write(list(st.session_state["room_pdfs"].keys()))
+            st.subheader("📄 Generated Room PDFs")
+            st.markdown("**Download individual room QP bundles:**")
+            
+            # Create columns for better layout
+            num_rooms = len(st.session_state["room_pdfs"])
+            cols_per_row = 3
+            
+            # Group room PDFs into rows
+            room_items = list(st.session_state["room_pdfs"].items())
+            
+            for i in range(0, num_rooms, cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < num_rooms:
+                        room, pdf_bytes = room_items[i + j]
+                        with col:
+                            # Create a styled container for each download button
+                            with st.container():
+                                st.markdown(f"""
+                                <div style="
+                                    border: 2px solid #1f77b4;
+                                    border-radius: 10px;
+                                    padding: 15px;
+                                    margin: 5px 0;
+                                    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+                                    text-align: center;
+                                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                                ">
+                                    <h4 style="margin: 0 0 10px 0; color: #1f77b4;">🏛️ {room}</h4>
+                                    <p style="margin: 0; color: #666; font-size: 0.9em;">
+                                        PDF Bundle Ready
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Download button with custom styling
+                                st.download_button(
+                                    label=f"📥 Download {room} QPs",
+                                    data=pdf_bytes,
+                                    file_name=f"{room}_QPs.pdf",
+                                    mime="application/pdf",
+                                    key=f"dl_tab3_room_pdf_{i+j}",
+                                    use_container_width=True
+                                )
+            
+            # Add summary information
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📊 Total Rooms", len(st.session_state["room_pdfs"]))
+            with col2:
+                if st.session_state.get("room_qp_summary_df") is not None:
+                    total_qps = st.session_state["room_qp_summary_df"]["Students"].sum() if "Students" in st.session_state["room_qp_summary_df"].columns else 0
+                    st.metric("📄 Total QP Copies", total_qps)
+            with col3:
+                st.metric("✅ Status", "Ready for Download")
+        else:
+            st.info("🔄 Generate Room-wise QP PDFs above to see download options here.")
 
 # -------------------------
-# Tab 4: Downloads
+# Tab 3: QP Arrangement (now tabs[2])
 # -------------------------
-with tabs[3]:
-    st.header("Downloads")
-    st.markdown("Download generated spreadsheets and room PDFs.")
-
-    if not st.session_state.get("generated_seating"):
-        st.info("No outputs to download yet. Generate seating and/or QP PDFs first.")
-    else:
-        if st.session_state["final_df_bytes"]:
-            st.download_button("📥 Download Seating Plan", st.session_state["final_df_bytes"],
-                               "SeatingPlan.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_seating_plan")
-        if st.session_state["detailed_seating_bytes"]:
-            st.download_button("📥 Download Detailed Seating", st.session_state["detailed_seating_bytes"],
-                               "DetailedSeating.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_detailed_seating")
-        if st.session_state["room_summary_bytes"]:
-            st.download_button("📥 Download Room Summary", st.session_state["room_summary_bytes"],
-                               "RoomSummary.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_room_summary")
-        if st.session_state["qp_summary_bytes"]:
-            st.download_button("📥 Download QP Summary (Detailed)", st.session_state["qp_summary_bytes"],
-                               "QP_Detailed.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_qp_detailed")
-        if st.session_state["qp_count_bytes"]:
-            st.download_button("📥 Download QP Counts per Room", st.session_state["qp_count_bytes"],
-                               "QP_Count.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_qp_counts")
-        if st.session_state["hall_qp_summary_bytes"]:
-            st.download_button("📥 Download Hall-wise QP Summary", st.session_state["hall_qp_summary_bytes"],
-                               "Hall_QP_Summary.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="dl_hall_qp_summary")
-
-        # Room PDFs
-        if st.session_state.get("room_pdfs"):
-            st.subheader("📄 Room-wise QP PDFs")
-            for i, (room, pdf_bytes) in enumerate(st.session_state["room_pdfs"].items()):
-                st.download_button(f"📥 Download {room} QPs", pdf_bytes, f"{room}_QPs.pdf", "application/pdf", key=f"dl_room_pdf_{i}")
 
 # -------------------------
 # End of app
 # -------------------------
-st.sidebar.markdown("SeatMaster")
-st.sidebar.write("Use tabs to manage workflow: Uploads → Seating → QP Arrangement → Downloads.")
+st.sidebar.markdown("# 🎓 SeatMaster")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📋 Workflow Guide")
+st.sidebar.markdown("""
+1. **📁 File Uploads** - Upload all required files
+2. **🪑 Seating Plan** - Generate seating arrangement
+3. **📄 QP Arrangement** - Create room-specific QP bundles
+
+💡 Downloads are available within each relevant tab!
+""")
+
+# Add workflow status indicators
+st.sidebar.markdown("### ✅ Progress Tracker")
+upload_status = "✅" if st.session_state.get("room_file_obj") and st.session_state.get("student_file_obj") else "⏳"
+seating_status = "✅" if st.session_state.get("generated_seating") else "⏳"
+qp_status = "✅" if st.session_state.get("generated_qp") else "⏳"
+
+st.sidebar.markdown(f"""
+- {upload_status} File Uploads
+- {seating_status} Seating Generation  
+- {qp_status} QP Bundle Creation
+""")
