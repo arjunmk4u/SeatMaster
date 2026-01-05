@@ -4,7 +4,7 @@ import pandas as pd
 import io
 import os
 
-from sheet_filter import generate_exam_sheets
+# from sheet_filter import generate_exam_sheets
 from utils import df_to_bytes, normalize_subject
 from seating import generate_seating
 from qp_arrange import generate_room_pdfs, generate_summaries
@@ -349,6 +349,7 @@ with tabs[3]:
 
     exam_title = st.text_input("Enter Exam Title (e.g. Internal Examination - September 2025)")
     exam_date = st.text_input("Enter Exam Date (e.g. 29/09/2025)")
+    exam_session = st.selectbox("Select Exam Session", ["FN", "AN"])
 
     if st.button("Generate Remark Sheets", key="generate_remarks"):
         if "seating_df" not in st.session_state or st.session_state["seating_df"] is None:
@@ -359,7 +360,7 @@ with tabs[3]:
                 template_path = st.session_state.get("template_path") or "data/templates/template.xlsx"
                 output_path = f"output/remarks_filled_{exam_title.replace(' ', '_')}.xlsx"
 
-                result_path = generate_remark_sheets(seating_df, exam_title, exam_date, template_path, output_path)
+                result_path = generate_remark_sheets(seating_df, exam_title, exam_date, exam_session, template_path, output_path)
 
                 st.success(f"✅ Remark sheets generated successfully for {len(seating_df['Room'].unique())} rooms.")
                 with open(result_path, "rb") as f:
