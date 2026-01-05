@@ -173,7 +173,7 @@ with tabs[1]:
                     st.error("Exam file must contain 'Class No' and 'Student Name'.")
                 else:
                     seating_df, final_df = generate_seating(room_df, exam_students, selected_rooms, selected_day)
-                    summary_df, qp_summary_df, qp_count_df, hall_qp_summary_df = generate_summaries(seating_df, selected_rooms)
+                    summary_df, qp_summary_df, qp_count_df, hall_qp_summary_df, room_subject_count_df = generate_summaries(seating_df, selected_rooms)
 
                     st.session_state["final_df_bytes"] = df_to_bytes(final_df)
                     st.session_state["detailed_seating_bytes"] = df_to_bytes(seating_df)
@@ -184,6 +184,8 @@ with tabs[1]:
                     st.session_state["qp_summary_raw"] = qp_summary_df
                     st.session_state["seating_df"] = seating_df
                     st.session_state["generated_seating"] = True
+                    st.session_state["room_subject_count_df"] = room_subject_count_df
+                    st.session_state["room_subject_count_bytes"] = df_to_bytes(room_subject_count_df)
                     st.success("✅ Seating plan generated successfully.")
             except Exception as e:
                 st.error(f"Error generating seating: {e}")
@@ -219,13 +221,16 @@ with tabs[2]:
     if not st.session_state.get("generated_seating"):
         st.info("Please generate seating first.")
     else:
-        summary_tabs = st.tabs(["🏛️ Room Summary", "📄 QP Details"])
+        summary_tabs = st.tabs(["🏛️ Room Summary", "📄 QP Details", "📊 Room × Subject Count"])
         with summary_tabs[0]:
             st.markdown("**Overview of subjects by room:**")
             st.dataframe(pd.read_excel(io.BytesIO(st.session_state["room_summary_bytes"])), width='stretch')
         with summary_tabs[1]:
             st.markdown("**Detailed question paper requirements:**")
             st.dataframe(pd.read_excel(io.BytesIO(st.session_state["qp_summary_bytes"])), width='stretch')
+        with summary_tabs[2]:
+            st.markdown("**Room × Subject Count:**")
+            st.dataframe(pd.read_excel(io.BytesIO(st.session_state["room_subject_count_bytes"])), width='stretch')
 
         # --- Normalize QP mapping before generation ---
         if mapping_df is not None:
@@ -382,7 +387,7 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### ✅ Progress Tracker")
 upload_status = "✅" if st.session_state.get("room_df") is not None else "⏳"
-exam_status = "✅" if st.session_state.get("exam_students_df") is not None else "⏳"
+exam_status = "✅" if st.session_state.get("exam_students_ df") is not None else "⏳"
 seating_status = "✅" if st.session_state.get("generated_seating") else "⏳"
 qp_status = "✅" if st.session_state.get("generated_qp") else "⏳"
 st.sidebar.markdown(f"""
