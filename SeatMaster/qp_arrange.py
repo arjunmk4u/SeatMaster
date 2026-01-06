@@ -79,6 +79,9 @@ def generate_room_pdfs(mapping_df, qp_summary_df, uploaded_qps, ordered_rooms):
             writer = PdfWriter()
 
             for subj, count in subject_counts.items():
+                st.write("SUBJECT FROM SEATING:", repr(subj))
+                st.write("SUBJECTS IN MAPPING:", mapping_df["Subject Name"].unique())
+
                 matched = mapping_df[mapping_df["Subject Name"] == subj]["QP Code"].values
                 if matched.size == 0:
                     st.warning(f"No QP code found for subject '{subj}' (room {room})")
