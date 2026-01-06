@@ -4,7 +4,6 @@ import pandas as pd
 import io
 import os
 
-from sheet_filter import generate_exam_sheets
 from utils import df_to_bytes, normalize_subject
 from seating import generate_seating
 from qp_arrange import generate_room_pdfs, generate_summaries
